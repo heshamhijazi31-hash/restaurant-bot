@@ -8,8 +8,14 @@ from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 
+# ================= CONFIG =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_IDS = [550027227]
+ADMIN_IDS = os.getenv("ADMIN_IDS")
+
+if ADMIN_IDS:
+    ADMIN_IDS = list(map(int, ADMIN_IDS.split(",")))
+else:
+    ADMIN_IDS = [550027227]
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
@@ -56,30 +62,39 @@ def add_to_cart(user_id, name, price):
 def clear_cart(user_id):
     cart[user_id] = {}
 
-# ================= UI =================
+# ================= KEYBOARDS =================
 def main_kb():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🍽 Menu", callback_data="menu")],
+        [InlineKeyboardButton(text="🛒 Cart", callback_data="cart")]
+    ])
+
+def categories_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🍔 Burgers", callback_data="cat_Burgers")],
         [InlineKeyboardButton(text="🥤 Drinks", callback_data="cat_Drinks")],
         [InlineKeyboardButton(text="🍰 Desserts", callback_data="cat_Desserts")],
-        [InlineKeyboardButton(text="🛒 Cart", callback_data="cart")]
+        [InlineKeyboardButton(text="⬅️ Back", callback_data="back_main")]
     ])
 
-def items_kb(category):
+def items_kb(cat):
     buttons = []
-    for i, item in enumerate(MENU[category]):
-        buttons.append([InlineKeyboardButton(
-            text=f"{item[0]} - ${item[1]}",
-            callback_data=f"add_{category}_{i}"
-        )])
-    buttons.append([InlineKeyboardButton(text="⬅️ Back", callback_data="back_main")])
+    for i, item in enumerate(MENU[cat]):
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"{item[0]} - ${item[1]}",
+                callback_data=f"add_{cat}_{i}"
+            )
+        ])
+
+    buttons.append([InlineKeyboardButton(text="⬅️ Back", callback_data="menu")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def cart_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✅ Checkout", callback_data="checkout")],
         [InlineKeyboardButton(text="🗑 Clear", callback_data="clear")],
-        [InlineKeyboardButton(text="⬅️ Back", callback_data="back_main")]
+        [InlineKeyboardButton(text="⬅️ Back", callback_data="menu")]
     ])
 
 def payment_kb():
@@ -88,26 +103,30 @@ def payment_kb():
         [InlineKeyboardButton(text="💳 Card", callback_data="pay_card")]
     ])
 
-def phone_kb():
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="📱 Send Phone", request_contact=True)]],
-        resize_keyboard=True
-    )
+phone_kb = ReplyKeyboardMarkup(
+    keyboard=[[KeyboardButton(text="📱 Send Phone", request_contact=True)]],
+    resize_keyboard=True
+)
 
 # ================= START =================
 @dp.message(CommandStart())
 async def start(message: Message):
     await message.answer("🍔 Welcome!", reply_markup=main_kb())
 
-# ================= CATEGORY =================
-@dp.callback_query(F.data.startswith("cat_"))
-async def category(cb: CallbackQuery):
-    cat = cb.data.split("_")[1]
-    await cb.message.edit_text(f"{cat} menu:", reply_markup=items_kb(cat))
+# ================= MENU =================
+@dp.callback_query(F.data == "menu")
+async def menu(cb: CallbackQuery):
+    await cb.message.edit_text("📋 Choose category:", reply_markup=categories_kb())
 
 @dp.callback_query(F.data == "back_main")
 async def back(cb: CallbackQuery):
     await cb.message.edit_text("🍔 Welcome!", reply_markup=main_kb())
+
+# ================= CATEGORY =================
+@dp.callback_query(F.data.startswith("cat_"))
+async def category(cb: CallbackQuery):
+    cat = cb.data.split("_")[1]
+    await cb.message.edit_text(f"{cat} Menu:", reply_markup=items_kb(cat))
 
 # ================= ADD =================
 @dp.callback_query(F.data.startswith("add_"))
@@ -124,7 +143,7 @@ async def show_cart(cb: CallbackQuery):
     user_cart = cart.get(cb.from_user.id, {})
 
     if not user_cart:
-        await cb.message.answer("Cart empty")
+        await cb.message.answer("🛒 Cart empty")
         return
 
     text = "🛒 Cart:\n\n"
@@ -153,24 +172,20 @@ async def checkout(cb: CallbackQuery, state: FSMContext):
         return
 
     await state.set_state(OrderState.phone)
-    await cb.message.answer("📱 Send your phone number:", reply_markup=phone_kb())
+    await cb.message.answer("📱 Send phone number:", reply_markup=phone_kb)
 
 # ================= PHONE =================
 @dp.message(OrderState.phone)
-async def get_phone(message: Message, state: FSMContext):
-    if message.contact:
-        phone = message.contact.phone_number
-    else:
-        phone = message.text
-
+async def phone(message: Message, state: FSMContext):
+    phone = message.contact.phone_number if message.contact else message.text
     await state.update_data(phone=phone)
-    await state.set_state(OrderState.address)
 
+    await state.set_state(OrderState.address)
     await message.answer("📍 Send your address:")
 
 # ================= ADDRESS =================
 @dp.message(OrderState.address)
-async def get_address(message: Message, state: FSMContext):
+async def address(message: Message, state: FSMContext):
     await state.update_data(address=message.text)
     await state.set_state(OrderState.payment)
 
@@ -213,10 +228,17 @@ async def confirm(cb: CallbackQuery, state: FSMContext):
 
     order_id = cursor.lastrowid
 
-    admin_msg = f"""
-📦 Order #{order_id}
+    username = cb.from_user.username
+    name = cb.from_user.full_name
 
-👤 {cb.from_user.full_name}
+    user_info = f"{name}"
+    if username:
+        user_info += f" (@{username})"
+
+    admin_msg = f"""
+📦 ORDER #{order_id}
+
+👤 {user_info}
 📱 {data['phone']}
 
 {items_text}
