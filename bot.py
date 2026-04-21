@@ -3,14 +3,11 @@ import sqlite3
 import os
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 
-# =======================
-# CONFIG
-# =======================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 ADMIN_IDS = os.getenv("ADMIN_IDS")
@@ -22,9 +19,7 @@ else:
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# =======================
-# DATABASE
-# =======================
+# ================= DB =================
 conn = sqlite3.connect("bot.db", check_same_thread=False)
 cursor = conn.cursor()
 
@@ -40,16 +35,20 @@ def init_db():
     )""")
     conn.commit()
 
-# =======================
-# STATES
-# =======================
+# ================= STATES =================
 class OrderState(StatesGroup):
-    waiting_address = State()
-    waiting_payment = State()
+    address = State()
+    payment = State()
 
-# =======================
-# CART
-# =======================
+# ================= MENU =================
+MENU = [
+    ("Burger", 5),
+    ("Pizza", 8),
+    ("Coke", 2),
+    ("Pepsi", 2),
+    ("Juice", 3)
+]
+
 cart = {}
 
 def add_to_cart(user_id, name, price):
@@ -62,24 +61,12 @@ def add_to_cart(user_id, name, price):
 def clear_cart(user_id):
     cart[user_id] = {}
 
-# =======================
-# MENU (ثابت للتبسيط)
-# =======================
-MENU = [
-    ("Burger", 5),
-    ("Pizza", 8),
-    ("Coke", 2),
-    ("Pepsi", 2),
-    ("Juice", 3)
-]
-
+# ================= UI =================
 def main_kb():
     buttons = []
     for i, item in enumerate(MENU):
         buttons.append([InlineKeyboardButton(text=f"{item[0]} - ${item[1]}", callback_data=f"add_{i}")])
-
     buttons.append([InlineKeyboardButton(text="🛒 Cart", callback_data="cart")])
-
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def cart_kb():
@@ -94,31 +81,23 @@ def payment_kb():
         [InlineKeyboardButton(text="💳 Card", callback_data="pay_card")]
     ])
 
-# =======================
-# START
-# =======================
+# ================= START =================
 @dp.message(CommandStart())
 async def start(message: Message):
-    await message.answer("🍔 Welcome! Choose items:", reply_markup=main_kb())
+    await message.answer("🍔 Welcome!", reply_markup=main_kb())
 
-# =======================
-# ADD
-# =======================
+# ================= ADD =================
 @dp.callback_query(F.data.startswith("add_"))
 async def add(cb: CallbackQuery):
     idx = int(cb.data.split("_")[1])
     item = MENU[idx]
-
     add_to_cart(cb.from_user.id, item[0], item[1])
     await cb.answer("Added ✅")
 
-# =======================
-# CART
-# =======================
+# ================= CART =================
 @dp.callback_query(F.data == "cart")
 async def show_cart(cb: CallbackQuery):
     user_cart = cart.get(cb.from_user.id, {})
-
     if not user_cart:
         await cb.message.answer("Cart empty")
         return
@@ -135,43 +114,33 @@ async def show_cart(cb: CallbackQuery):
 
     await cb.message.answer(text, reply_markup=cart_kb())
 
-# =======================
-# CLEAR
-# =======================
+# ================= CLEAR =================
 @dp.callback_query(F.data == "clear")
 async def clear(cb: CallbackQuery):
     clear_cart(cb.from_user.id)
     await cb.message.answer("Cart cleared")
 
-# =======================
-# CHECKOUT → ADDRESS
-# =======================
+# ================= CHECKOUT =================
 @dp.callback_query(F.data == "checkout")
 async def checkout(cb: CallbackQuery, state: FSMContext):
     if not cart.get(cb.from_user.id):
         await cb.answer("Cart empty")
         return
 
-    await state.set_state(OrderState.waiting_address)
-    await cb.message.answer("📍 Send your address:")
+    await state.set_state(OrderState.address)
+    await cb.message.answer("📍 Send address")
 
-# =======================
-# ADDRESS → PAYMENT
-# =======================
-@dp.message(OrderState.waiting_address)
+@dp.message(OrderState.address)
 async def get_address(message: Message, state: FSMContext):
     await state.update_data(address=message.text)
-    await state.set_state(OrderState.waiting_payment)
+    await state.set_state(OrderState.payment)
+    await message.answer("💳 Payment method:", reply_markup=payment_kb())
 
-    await message.answer("💳 Choose payment method:", reply_markup=payment_kb())
-
-# =======================
-# PAYMENT → CONFIRM
-# =======================
+# ================= PAYMENT =================
 @dp.callback_query(F.data.startswith("pay_"))
 async def payment(cb: CallbackQuery, state: FSMContext):
-    payment_method = "Cash" if "cash" in cb.data else "Card"
-    await state.update_data(payment=payment_method)
+    pay = "Cash" if "cash" in cb.data else "Card"
+    await state.update_data(payment=pay)
 
     data = await state.get_data()
     user_cart = cart.get(cb.from_user.id, {})
@@ -179,28 +148,15 @@ async def payment(cb: CallbackQuery, state: FSMContext):
     items_text = "\n".join([f"{k} x{v['qty']}" for k, v in user_cart.items()])
     total = sum(v["price"] * v["qty"] for v in user_cart.values())
 
-    order_text = f"""
-🧾 Order Summary:
-
-{items_text}
-
-📍 {data['address']}
-💳 {payment_method}
-💰 {total}$
-
-Confirm?
-"""
-
-    await cb.message.answer(order_text, reply_markup=InlineKeyboardMarkup(
-        inline_keyboard=[
+    await cb.message.answer(
+        f"{items_text}\n\n📍 {data['address']}\n💳 {pay}\n💰 {total}$\n\nConfirm?",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="✅ Confirm", callback_data="confirm")],
             [InlineKeyboardButton(text="❌ Cancel", callback_data="cancel")]
-        ]
-    ))
+        ])
+    )
 
-# =======================
-# CONFIRM
-# =======================
+# ================= CONFIRM =================
 @dp.callback_query(F.data == "confirm")
 async def confirm(cb: CallbackQuery, state: FSMContext):
     data = await state.get_data()
@@ -217,10 +173,28 @@ async def confirm(cb: CallbackQuery, state: FSMContext):
 
     order_id = cursor.lastrowid
 
-    admin_msg = f"""
-📦 NEW ORDER #{order_id}
+    username = cb.from_user.username
+    name = cb.from_user.full_name
 
-👤 User: {cb.from_user.id}
+    user_text = f"{name}"
+    link = f"tg://user?id={cb.from_user.id}"
+    if username:
+        user_text += f" (@{username})"
+        link = f"https://t.me/{username}"
+
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Accept", callback_data=f"accept_{order_id}_{cb.from_user.id}"),
+            InlineKeyboardButton(text="❌ Reject", callback_data=f"reject_{order_id}_{cb.from_user.id}")
+        ],
+        [InlineKeyboardButton(text="💬 Message", url=link)]
+    ])
+
+    admin_msg = f"""
+📦 Order #{order_id}
+
+👤 {user_text}
+🆔 {cb.from_user.id}
 
 {items_text}
 
@@ -230,24 +204,50 @@ async def confirm(cb: CallbackQuery, state: FSMContext):
 """
 
     for admin in ADMIN_IDS:
-        await bot.send_message(admin, admin_msg)
+        await bot.send_message(admin, admin_msg, reply_markup=kb)
 
     clear_cart(cb.from_user.id)
     await state.clear()
 
     await cb.message.answer(f"✅ Order #{order_id} sent!")
 
-# =======================
-# CANCEL
-# =======================
-@dp.callback_query(F.data == "cancel")
-async def cancel(cb: CallbackQuery, state: FSMContext):
-    await state.clear()
-    await cb.message.answer("❌ Order cancelled")
+# ================= ACCEPT / REJECT =================
+@dp.callback_query(F.data.startswith("accept_"))
+async def accept(cb: CallbackQuery):
+    _, oid, uid = cb.data.split("_")
+    cursor.execute("UPDATE orders SET status='Accepted' WHERE id=?", (oid,))
+    conn.commit()
+    await bot.send_message(uid, f"✅ Order #{oid} accepted")
+    await cb.message.edit_text(cb.message.text + "\n\n✅ Accepted")
 
-# =======================
-# MAIN
-# =======================
+@dp.callback_query(F.data.startswith("reject_"))
+async def reject(cb: CallbackQuery):
+    _, oid, uid = cb.data.split("_")
+    cursor.execute("UPDATE orders SET status='Rejected' WHERE id=?", (oid,))
+    conn.commit()
+    await bot.send_message(uid, f"❌ Order #{oid} rejected")
+    await cb.message.edit_text(cb.message.text + "\n\n❌ Rejected")
+
+# ================= DASHBOARD =================
+@dp.message(Command("admin"))
+async def admin_panel(message: Message):
+    if message.from_user.id not in ADMIN_IDS:
+        return
+
+    cursor.execute("SELECT COUNT(*) FROM orders")
+    total = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM orders WHERE status='Pending'")
+    pending = cursor.fetchone()[0]
+
+    await message.answer(f"""
+📊 Dashboard
+
+📦 Total Orders: {total}
+⏳ Pending: {pending}
+""")
+
+# ================= MAIN =================
 async def main():
     init_db()
 
