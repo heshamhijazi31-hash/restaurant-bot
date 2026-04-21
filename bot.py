@@ -10,8 +10,8 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 # ================= CONFIG =================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_IDS = os.getenv("ADMIN_IDS")
 
+ADMIN_IDS = os.getenv("ADMIN_IDS")
 if ADMIN_IDS:
     ADMIN_IDS = list(map(int, ADMIN_IDS.split(",")))
 else:
@@ -45,9 +45,32 @@ class OrderState(StatesGroup):
 
 # ================= MENU =================
 MENU = {
-    "Burgers": [("Burger", 5), ("Double Burger", 7)],
-    "Drinks": [("Coke", 2), ("Pepsi", 2), ("Juice", 3)],
-    "Desserts": [("Ice Cream", 3), ("Cake", 4)]
+    "Burgers": [
+        ("Burger", 5),
+        ("Double Burger", 7),
+        ("Chicken Burger", 6),
+        ("Cheese Steak", 8)
+    ],
+    "Pizza": [
+        ("Margherita Pizza", 6),
+        ("Pepperoni Pizza", 8),
+        ("Chicken Pizza", 7),
+        ("Veggie Pizza", 6)
+    ],
+    "Shawarma": [
+        ("Chicken Shawarma", 5),
+        ("Beef Shawarma", 6),
+        ("Shawarma Plate", 8)
+    ],
+    "Drinks": [
+        ("Coke", 2),
+        ("Pepsi", 2),
+        ("Juice", 3)
+    ],
+    "Desserts": [
+        ("Ice Cream", 3),
+        ("Cake", 4)
+    ]
 }
 
 cart = {}
@@ -72,6 +95,8 @@ def main_kb():
 def categories_kb():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🍔 Burgers", callback_data="cat_Burgers")],
+        [InlineKeyboardButton(text="🍕 Pizza", callback_data="cat_Pizza")],
+        [InlineKeyboardButton(text="🌯 Shawarma", callback_data="cat_Shawarma")],
         [InlineKeyboardButton(text="🥤 Drinks", callback_data="cat_Drinks")],
         [InlineKeyboardButton(text="🍰 Desserts", callback_data="cat_Desserts")],
         [InlineKeyboardButton(text="⬅️ Back", callback_data="back_main")]
@@ -228,17 +253,10 @@ async def confirm(cb: CallbackQuery, state: FSMContext):
 
     order_id = cursor.lastrowid
 
-    username = cb.from_user.username
-    name = cb.from_user.full_name
-
-    user_info = f"{name}"
-    if username:
-        user_info += f" (@{username})"
-
     admin_msg = f"""
 📦 ORDER #{order_id}
 
-👤 {user_info}
+👤 {cb.from_user.full_name}
 📱 {data['phone']}
 
 {items_text}
